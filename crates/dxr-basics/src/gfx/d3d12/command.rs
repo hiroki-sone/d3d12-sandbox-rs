@@ -9,29 +9,34 @@ use windows::{
     },
 };
 
-pub struct CommandQueue {
+pub struct Queue {
     command_list_type: D3D12_COMMAND_LIST_TYPE,
-    command_queue: ID3D12CommandQueue,
+    queue: ID3D12CommandQueue,
 
     // backing memory for recording the GPU commands into a command list
     // cannot be reset or reused until the GPU finishes executing all commands
-    allocators: VecDeque<CommandAllocator>,
+    allocators: VecDeque<Allocator>,
+    allocator_count: usize,
 
     // GPU commands are recorded into this
     command_lists: VecDeque<ID3D12GraphicsCommandList7>,
+    command_list_count: usize,
 
-    device: ID3D12Device2, // is it possible to use reference (&ID3D12Device2) here?
+    device: ID3D12Device5, // is it possible to use reference (&ID3D12Device5) here?
 
     // sync objects
     fence: ID3D12Fence,
     fence_event: HANDLE,
     fence_value: FenceValue,
+
+    name: String,
 }
 
-impl CommandQueue {
+impl Queue {
     pub fn build(
-        device: &ID3D12Device2,
+        device: &ID3D12Device5,
         command_list_type: D3D12_COMMAND_LIST_TYPE,
+        name: String,
     ) -> windows::core::Result<Self> {
         let desc = D3D12_COMMAND_QUEUE_DESC {
             Type: command_list_type,
@@ -39,11 +44,15 @@ impl CommandQueue {
             Flags: D3D12_COMMAND_QUEUE_FLAG_NONE,
             NodeMask: 0,
         };
-        let command_queue: ID3D12CommandQueue = unsafe { device.CreateCommandQueue(&desc) }?;
-        set_name(&command_queue, windows::core::w!("command_queue"))?;
+        let queue: ID3D12CommandQueue = unsafe { device.CreateCommandQueue(&desc) }?;
+        set_name_str(&queue, &name)?;
 
         let fence_value = 0;
-        let fence = unsafe { device.CreateFence(fence_value, D3D12_FENCE_FLAG_NONE) }?;
+
+        let fence: ID3D12Fence = unsafe { device.CreateFence(fence_value, D3D12_FENCE_FLAG_NONE) }?;
+        let fence_name = name.clone() + "::fence";
+        set_name_str(&fence, &fence_name)?;
+
         let fence_event = unsafe {
             CreateEventA(
                 None,
@@ -55,53 +64,59 @@ impl CommandQueue {
 
         Ok(Self {
             command_list_type,
-            command_queue,
+            queue,
             allocators: Default::default(),
+            allocator_count: 0,
             command_lists: Default::default(),
+            command_list_count: 0,
             device: device.clone(),
             fence,
             fence_event,
             fence_value: FenceValue { v: fence_value },
+            name,
         })
     }
 
-    pub fn request_command_ctx(&mut self) -> windows::core::Result<CommandContext> {
-        let allocator = self
-            .allocators
-            .pop_front()
-            .and_then(|e| {
-                if self.is_fence_completed(e.fence_value) {
-                    unsafe { e.allocator.Reset() }.unwrap();
-                    Some(e.allocator)
-                } else {
-                    self.allocators.push_front(e);
-                    None
-                }
-            })
-            .unwrap_or_else(|| {
-                create_command_allocator(&self.device, self.command_list_type, "command_allocator")
-                    .unwrap()
-            });
+    pub fn request_command_ctx(&mut self) -> windows::core::Result<Context> {
+        let allocator = self.allocators.pop_front().and_then(|e| {
+            if self.is_fence_completed(e.fence_value) {
+                unsafe { e.allocator.Reset() }.unwrap();
+                Some(e.allocator)
+            } else {
+                self.allocators.push_front(e);
+                None
+            }
+        });
+        let allocator_created = allocator.is_none();
+        let allocator = allocator.unwrap_or_else(|| {
+            let name = format!("{}::allocators[{}]", self.name, self.allocator_count);
+            create_allocator(&self.device, self.command_list_type, &name).unwrap()
+        });
+        if allocator_created {
+            self.allocator_count += 1;
+        }
 
-        let command_list = self
-            .command_lists
-            .pop_front()
-            .map(|e| {
-                unsafe { e.Reset(&allocator, None) }.unwrap();
-                e
-            })
-            .unwrap_or_else(|| {
-                create_command_list(
-                    &self.device,
-                    &allocator,
-                    self.command_list_type,
-                    None,
-                    "command_list",
-                )
-                .unwrap()
-            });
+        let command_list = self.command_lists.pop_front().map(|e| {
+            unsafe { e.Reset(&allocator, None) }.unwrap();
+            e
+        });
+        let list_created = command_list.is_none();
+        let command_list = command_list.unwrap_or_else(|| {
+            let name = format!("{}::command_lists[{}]", self.name, self.command_list_count);
+            create_command_list(
+                &self.device,
+                &allocator,
+                self.command_list_type,
+                None,
+                &name,
+            )
+            .unwrap()
+        });
+        if list_created {
+            self.command_list_count += 1;
+        }
 
-        Ok(CommandContext {
+        Ok(Context {
             command_list,
             allocator,
         })
@@ -109,25 +124,22 @@ impl CommandQueue {
 
     #[must_use]
     pub fn get(&self) -> &ID3D12CommandQueue {
-        &self.command_queue
+        &self.queue
     }
 
-    pub fn execute_commands(
-        &mut self,
-        context: CommandContext,
-    ) -> windows::core::Result<FenceValue> {
+    pub fn execute_commands(&mut self, context: Context) -> windows::core::Result<FenceValue> {
         let command_list = context.command_list;
         unsafe {
             command_list.Close()?;
 
             let command_lists = [Some(command_list.cast()?)];
-            self.command_queue.ExecuteCommandLists(&command_lists);
+            self.queue.ExecuteCommandLists(&command_lists);
         }
         self.command_lists.push_back(command_list);
 
         let fence_value = self.signal();
 
-        self.allocators.push_back(CommandAllocator {
+        self.allocators.push_back(Allocator {
             allocator: context.allocator,
             fence_value,
         });
@@ -138,7 +150,7 @@ impl CommandQueue {
     pub fn signal(&mut self) -> FenceValue {
         self.fence_value.v += 1;
 
-        unsafe { self.command_queue.Signal(&self.fence, self.fence_value.v) }.unwrap();
+        unsafe { self.queue.Signal(&self.fence, self.fence_value.v) }.unwrap();
         self.fence_value
     }
 
@@ -167,7 +179,7 @@ impl CommandQueue {
     }
 }
 
-impl Drop for CommandQueue {
+impl Drop for Queue {
     fn drop(&mut self) {
         self.flush();
         unsafe { CloseHandle(self.fence_event) }.unwrap();
@@ -180,24 +192,25 @@ pub struct FenceValue {
     v: u64,
 }
 
-pub struct CommandContext {
+#[must_use]
+pub struct Context {
     command_list: ID3D12GraphicsCommandList7,
     allocator: ID3D12CommandAllocator,
 }
 
-impl CommandContext {
+impl Context {
     pub fn command_list(&self) -> &ID3D12GraphicsCommandList7 {
         &self.command_list
     }
 }
 
-struct CommandAllocator {
+struct Allocator {
     allocator: ID3D12CommandAllocator,
     fence_value: FenceValue,
 }
 
-fn create_command_allocator(
-    device: &ID3D12Device2,
+fn create_allocator(
+    device: &ID3D12Device5,
     cmd_list_type: D3D12_COMMAND_LIST_TYPE,
     name: &str,
 ) -> windows::core::Result<ID3D12CommandAllocator> {
@@ -208,7 +221,7 @@ fn create_command_allocator(
 }
 
 fn create_command_list(
-    device: &ID3D12Device2,
+    device: &ID3D12Device5,
     allocator: &ID3D12CommandAllocator,
     command_list_type: D3D12_COMMAND_LIST_TYPE,
     initial_state: Option<&ID3D12PipelineState>,
