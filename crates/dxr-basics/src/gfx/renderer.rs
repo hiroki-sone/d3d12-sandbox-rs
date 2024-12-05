@@ -118,7 +118,7 @@ impl Renderer {
         let draw_mesh_pso = create_draw_mesh_pso(&device, &draw_mesh_root_signature).unwrap();
 
         let cs = ShaderConfig {
-            path: "shaders/raytracing.hlsl".into(),
+            path: "shaders/dxr-basics/raytracing.hlsl".into(),
             entry_point: "main".into(),
             target: "cs_6_6".into(),
         };
@@ -552,7 +552,7 @@ fn create_draw_mesh_pso(
 ) -> windows::core::Result<ID3D12PipelineState> {
     let shader_compiler = ShaderCompiler::build(true)?;
 
-    let hlsl: PathBuf = "shaders/rasterization.hlsl".into();
+    let hlsl: PathBuf = "shaders/dxr-basics/rasterization.hlsl".into();
     let vs_config = ShaderConfig {
         path: hlsl.clone(),
         entry_point: "vs_main".into(),
@@ -760,7 +760,7 @@ fn create_copy_texture_pso(
 ) -> windows::core::Result<ID3D12PipelineState> {
     let shader_compiler = ShaderCompiler::build(true)?;
 
-    let hlsl: PathBuf = "shaders/fullscreen.hlsl".into();
+    let hlsl: PathBuf = "shaders/dxr-basics/fullscreen.hlsl".into();
     let vs_config = ShaderConfig {
         path: hlsl.clone(),
         entry_point: "vs_main".into(),

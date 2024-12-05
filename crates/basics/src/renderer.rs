@@ -458,7 +458,7 @@ fn create_pso(
 ) -> windows::core::Result<ID3D12PipelineState> {
     let shader_compiler = ShaderCompiler::build(true)?;
 
-    let hlsl: PathBuf = "shaders/basics.hlsl".into();
+    let hlsl: PathBuf = "shaders/basics/basics.hlsl".into();
     let vs_config = ShaderConfig {
         path: hlsl.clone(),
         entry_point: "vs_main".into(),

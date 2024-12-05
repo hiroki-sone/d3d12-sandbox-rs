@@ -25,16 +25,9 @@ fn copy_dll(dll: &str) {
 
 fn copy_shaders(shader: &str) {
     let out_dir = std::env::var("OUT_DIR").unwrap() + "/../../../";
-    let out_dir = path::Path::new(&out_dir).join("shaders/");
-
-    if !out_dir.exists() {
-        if let Err(e) = fs::create_dir(&out_dir) {
-            println!(
-                "Failed to create {}: {e}",
-                out_dir.as_os_str().to_str().unwrap()
-            )
-        }
-    }
+    let out_dir = path::Path::new(&out_dir).join("shaders/basics/");
+    create_dir(out_dir.parent().unwrap());
+    create_dir(&out_dir);
 
     let src_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap() + "/shaders/";
     let src = src_dir + shader;
@@ -43,5 +36,16 @@ fn copy_shaders(shader: &str) {
 
     if let Err(e) = fs::copy(&src, &dst) {
         panic!("Failed to copy {src}: {e}");
+    }
+}
+
+fn create_dir(dir: &path::Path) {
+    if !dir.exists() {
+        if let Err(e) = fs::create_dir(dir) {
+            println!(
+                "Failed to create {}: {e}",
+                dir.as_os_str().to_str().unwrap()
+            )
+        }
     }
 }
