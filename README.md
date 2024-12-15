@@ -26,3 +26,6 @@ Implements simple ligting including
   * [Trowbridge-Reitz microfacet BRDF (a.k.a. GGX)](https://www.cs.cornell.edu/~srm/publications/EGSR07-btdf.html)
   * [Fresnel reflectance using Lazanyi-Schlick approximation with Naty Hoffman's reparametrization](https://renderwonk.com/publications/mam2019/)
 * Lambertian diffuse reflection
+
+There are two rendering modes; Rastarization and Raytracing.  
+The mode can be toggled with Space key.
